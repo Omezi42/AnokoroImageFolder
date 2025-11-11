@@ -55,12 +55,20 @@ def capture():
     ImageGrab.grab(bbox=CARD_CROP_REGION).save(filename)
     print(f"📷 Saved: {os.path.basename(filename)}")
 
+def show_mouse_position():
+    """現在のマウス位置を表示する"""
+    x, y = pyautogui.position()
+    print(f"📍 現在のマウス位置: ({x}, {y})")
+
 def main():
     print(f"--- Step 1: Capture (Save to {OUTPUT_DIR}) ---")
-    print("[F6]: Single Shot / [F7]: Auto Mode / [Esc]: Stop Auto")
+    print("[F2] : 現在のマウスカーソル位置を表示（座標確認用）[F6]: Single Shot / [F7]: Auto Mode / [Esc]: Stop Auto")
     
     while True:
-        if keyboard.is_pressed('f6'):
+        if keyboard.is_pressed('f2'):
+            show_mouse_position()
+            time.sleep(0.3) # 連打防止
+        elif keyboard.is_pressed('f6'):
             capture()
             time.sleep(0.5)
         elif keyboard.is_pressed('f7'):
