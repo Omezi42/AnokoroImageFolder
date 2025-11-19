@@ -15,7 +15,7 @@ NAME_CROP_REGION = (983, 183, 1574, 252)
 NEXT_BUTTON_POS = (1708, 1003)
 CAPTURE_LIMIT = 594
 WAIT_TIME = 0.1  # 次のカードへの待機時間
-OUTPUT_DIR = os.path.join("images", "captured_cards")
+OUTPUT_DIR = os.path.join("images", "captured_cards_add")
 CARD_LIST_FILE = "all_card_names.txt" # カード名リストのファイルパス
 SIMILARITY_THRESHOLD = 0.6  # 類似度のしきい値。これ未満の場合は「不明」とみなす
 

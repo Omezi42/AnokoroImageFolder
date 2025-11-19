@@ -10,8 +10,8 @@ from tqdm import tqdm # 進捗表示用（pip install tqdm が必要。なけれ
 # 相対座標 = (315-293, 261-175, 738-293, 484-175) = (22, 86, 445, 309)
 RELATIVE_ILLUST_REGION = (22, 86, 445, 309)
 
-INPUT_DIR = os.path.join("images", "captured_cards")
-OUTPUT_DIR = os.path.join("images", "cropped_cards")
+INPUT_DIR = os.path.join("images", "captured_cards_add")
+OUTPUT_DIR = os.path.join("images", "cropped_cards_add")
 
 def main():
     if not os.path.exists(OUTPUT_DIR):

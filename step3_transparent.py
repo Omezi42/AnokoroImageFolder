@@ -4,8 +4,8 @@ from PIL import Image
 from tqdm import tqdm
 import io
 
-INPUT_DIR = os.path.join("images", "cropped_cards")
-OUTPUT_DIR = os.path.join("images", "transparent_cards")
+INPUT_DIR = os.path.join("images", "cropped_cards_add")
+OUTPUT_DIR = os.path.join("images", "transparent_cards_add")
 
 def main():
     if not os.path.exists(OUTPUT_DIR):
