@@ -1,0 +1,8 @@
+pillow
+keyboard
+pyautogui
+easyocr
+numpy
+rembg
+onnxruntime
+tqdm

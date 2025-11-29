@@ -13,11 +13,11 @@ import numpy as np # PIL ImageをNumpy配列に変換するために追加
 CARD_CROP_REGION = (293, 175, 770, 840)
 NAME_CROP_REGION = (983, 183, 1574, 252)
 NEXT_BUTTON_POS = (1708, 1003)
-CAPTURE_LIMIT = 594
+CAPTURE_LIMIT = 612
 WAIT_TIME = 0.1  # 次のカードへの待機時間
 OUTPUT_DIR = os.path.join("images", "captured_cards_add")
 CARD_LIST_FILE = "all_card_names.txt" # カード名リストのファイルパス
-SIMILARITY_THRESHOLD = 0.6  # 類似度のしきい値。これ未満の場合は「不明」とみなす
+SIMILARITY_THRESHOLD = 0.7  # 類似度のしきい値。これ未満の場合は「不明」とみなす
 
 # OCRリーダーの初期化
 print("OCRモデルを読み込んでいます...")
