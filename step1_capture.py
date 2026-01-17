@@ -7,17 +7,18 @@ import pyautogui
 import easyocr
 import re
 import difflib  # 文字列の類似度比較のために追加
+import cv2 # 画像処理用にOpenCVを追加
 import numpy as np # PIL ImageをNumpy配列に変換するために追加
 
 # --- 設定項目 ---
 CARD_CROP_REGION = (293, 175, 770, 840)
 NAME_CROP_REGION = (983, 183, 1574, 252)
 NEXT_BUTTON_POS = (1708, 1003)
-CAPTURE_LIMIT = 612
+CAPTURE_LIMIT = 118
 WAIT_TIME = 0.1  # 次のカードへの待機時間
 OUTPUT_DIR = os.path.join("images", "captured_cards_add")
 CARD_LIST_FILE = "all_card_names.txt" # カード名リストのファイルパス
-SIMILARITY_THRESHOLD = 0.7  # 類似度のしきい値。これ未満の場合は「不明」とみなす
+SIMILARITY_THRESHOLD = 1  # 類似度のしきい値。これ未満の場合は「不明」とみなす
 
 # OCRリーダーの初期化
 print("OCRモデルを読み込んでいます...")
@@ -42,21 +43,90 @@ def sanitize_filename(filename):
     """ファイル名として使えない文字を'_'に置き換える"""
     return re.sub(r'[\\|/|:|?|.|"|<|>|\|]', '_', filename)
 
+def preprocess_image(image, mode='standard'):
+    """OCR精度向上のための画像前処理"""
+    # PIL Image -> Numpy配列 (RGB)
+    img_np = np.array(image)
+    
+    # RGB -> BGR (OpenCV用)
+    img_cv = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
+    
+    # 共通: グレースケール化
+    gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+
+    if mode == 'standard':
+        # 大津の二値化
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        return binary
+        
+    elif mode == 'grayscale':
+        # そのまま（拡大はEasyOCRに任せる）
+        return gray
+        
+    elif mode == 'invert':
+        # 反転 + 二値化
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        return cv2.bitwise_not(binary)
+
+    elif mode == 'adaptive':
+        # 適応的閾値処理 (照明ムラがある場合に有効)
+        return cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+        
+    return gray # defalt
+
+def perform_ocr(image):
+    """画像からOCRを行い、テキストと信頼度を返す"""
+    # EasyOCRの設定はここで統一
+    result = reader.readtext(image, detail=1, canvas_size=2560, mag_ratio=1.5)
+    
+    full_text = ""
+    min_conf = 1.0
+    
+    if not result:
+        return "", 0.0
+
+    for _, text, conf in result:
+        full_text += text
+        if conf < min_conf:
+            min_conf = conf
+            
+    return full_text.replace(" ", "").strip(), min_conf
+
 def get_ocr_result():
-    """指定領域からOCRでテキストを抽出する"""
+    """指定領域からOCRでテキストを抽出する。複数モードで試行する。"""
     try:
         # 1. 領域をキャプチャ
         name_img = ImageGrab.grab(bbox=NAME_CROP_REGION)
         
-        # 2. PIL ImageをNumpy配列に変換（EasyOCRが直接扱える形式）
-        name_img_np = np.array(name_img)
+        # 試行するモードの順番
+        # まずはstandard(二値化)を試し、信頼度が低ければ他を試す
+        modes = ['standard', 'grayscale', 'invert', 'adaptive']
         
-        # 3. OCR実行
-        result = reader.readtext(name_img_np, detail=0)
+        best_text = None
+        best_conf = 0.0
+        CONFIDENCE_THRESHOLD = 0.7 # これを超えたら即採用
+
+        for mode in modes:
+            processed_img = preprocess_image(name_img, mode=mode)
+            text, conf = perform_ocr(processed_img)
+            
+            print(f"  Mode '{mode}': Text='{text}', Conf={conf:.4f}")
+            
+            # 結果が空でなければ候補にする
+            if text:
+                if conf > best_conf:
+                    best_conf = conf
+                    best_text = text
+                
+                # 十分な信頼度があればループを抜けて即採用
+                if conf >= CONFIDENCE_THRESHOLD:
+                    print(f"  -> Sufficient confidence! Selecting '{text}'")
+                    return text
         
-        if result:
-            # 4. OCR結果が複数ブロックの場合があるので連結し、空白を除去
-            return "".join(result).replace(" ", "").strip()
+        if best_text:
+             print(f"OCR Best Result: '{best_text}' (Conf: {best_conf:.4f})")
+             return best_text
+             
     except Exception as e:
         print(f"OCR実行中にエラー: {e}")
     return None
@@ -84,11 +154,11 @@ def find_closest_card_name(ocr_name):
     # 最も高かった類似度が、設定したしきい値（例: 0.6）以上の場合
     if highest_ratio >= SIMILARITY_THRESHOLD:
         print(f"OCR: '{ocr_name}' -> 候補: '{best_match}' (類似度: {highest_ratio:.2f})")
-        return best_match # 最も近かったカード名を返す
+        return best_match, True # (名前, 一致フラグ)
     else:
         # しきい値未満の場合は、一致するものがなかったとみなす
         print(f"OCR: '{ocr_name}' -> 一致候補なし (最高: '{best_match}' {highest_ratio:.2f})")
-        return None 
+        return ocr_name, False
 
 def capture():
     """カード画像のキャプチャと保存を行う"""
@@ -100,34 +170,48 @@ def capture():
     
     # 2. OCR結果を元に、カード名リストから最も近い名前を探す
     card_name = None
+    is_match = False
+    
     if all_card_names:
         # カードリストがある場合は、最も近い名前を探す
-        card_name = find_closest_card_name(ocr_result)
+        card_name, is_match = find_closest_card_name(ocr_result)
     elif ocr_result:
         # カードリストがない場合は、OCR結果をそのまま（サニタイズして）使う
         print(f"OCR: '{ocr_result}' (リスト照合なし)")
         card_name = ocr_result
+        is_match = True # リストがないので強制的に通常フォルダ扱い（あるいはFalseにするか運用次第だが、今回はリスト照合時の閾値判定が主眼）
     
-    # 3. ファイル名を決定
+    # 3. 保存先ディレクトリの決定
+    target_dir = OUTPUT_DIR
+    if not is_match:
+        target_dir = os.path.join(OUTPUT_DIR, "NotMatchName")
+        if not os.path.exists(target_dir):
+            os.makedirs(target_dir)
+
+    # 4. ファイル名を決定
     if card_name:
         # 候補が見つかった（またはOCR結果をそのまま使う）場合
         base_name = sanitize_filename(card_name)
-        filename = os.path.join(OUTPUT_DIR, f"{base_name}.png")
+        filename = os.path.join(target_dir, f"{base_name}.png")
         counter = 1
         # ファイル名の重複チェック
         while os.path.exists(filename):
-            filename = os.path.join(OUTPUT_DIR, f"{base_name}_{counter}.png")
+            filename = os.path.join(target_dir, f"{base_name}_{counter}.png")
             counter += 1
     else:
         # 候補が見つからなかった（OCR失敗または類似度不足）場合
+        # OCR失敗の場合はNotMatchNameに入れるべきか？ -> OCR結果がNoneならそもそも名前がないので card_timestamp になる
+        # ここではOCR名前取得自体の失敗(None)は OUTPUT_DIR のままにする（名前不明として）
+        # ただしOCR結果はあるが一致しなかった場合は NotMatchName に行く
+        
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = os.path.join(OUTPUT_DIR, f"card_{timestamp}.png")
-        if ocr_result: # OCR結果はあったが候補がなかった場合、ログに残す
-            print(f"（保存: card_{timestamp}.png / OCR元: '{ocr_result}'）")
+        if ocr_result: # ここに来るのはおかしい（card_nameがNoneということはocr_resultもNoneか空）
+             pass
 
-    # 4. カード領域の画像を保存
+    # 5. カード領域の画像を保存
     ImageGrab.grab(bbox=CARD_CROP_REGION).save(filename)
-    print(f"📷 Saved: {os.path.basename(filename)}")
+    print(f"📷 Saved: {os.path.basename(filename)} (in {os.path.basename(target_dir)})")
 
 def show_mouse_position():
     """現在のマウス位置を表示する"""
