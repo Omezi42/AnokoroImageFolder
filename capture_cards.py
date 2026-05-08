@@ -18,10 +18,14 @@ CARD_WIDTH = CARD_RIGHT - CARD_LEFT
 CARD_HEIGHT = CARD_BOTTOM - CARD_TOP
 CARD_REGION = (CARD_LEFT, CARD_TOP, CARD_WIDTH, CARD_HEIGHT)
 
-# OCRで名前を読み取る相対領域 (カード左上を原点として、カード名が書かれていると推測される領域)
-# 左端 (0)、上端 (0)、右端 (477)、下端 (80) と仮定
-NAME_REGION_TOP = 0
-NAME_REGION_BOTTOM = 85
+# OCRで名前を読み取る領域 (画面全体の絶対座標: left, top, right, bottom)
+OCR_LEFT = 1000
+OCR_TOP = 190
+OCR_RIGHT = 1500
+OCR_BOTTOM = 250
+OCR_WIDTH = OCR_RIGHT - OCR_LEFT
+OCR_HEIGHT = OCR_BOTTOM - OCR_TOP
+OCR_REGION = (OCR_LEFT, OCR_TOP, OCR_WIDTH, OCR_HEIGHT)
 
 OUTPUT_DIR = os.path.join("images", "captured_cards_add")
 CARD_NAMES_FILE = "all_card_names.txt"
@@ -72,8 +76,8 @@ def main():
                 # region=(left, top, width, height)
                 screenshot = pyautogui.screenshot(region=CARD_REGION)
                 
-                # 2. OCR用に名前部分だけを切り抜く
-                name_img = screenshot.crop((0, NAME_REGION_TOP, CARD_WIDTH, NAME_REGION_BOTTOM))
+                # 2. OCR用に名前部分の領域を直接キャプチャ
+                name_img = pyautogui.screenshot(region=OCR_REGION)
                 
                 # Pillow Image -> NumPy 形式へ変換してEasyOCRへ渡す
                 name_np = np.array(name_img)
