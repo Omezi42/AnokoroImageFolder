@@ -96,7 +96,13 @@
                 </div>
             </div>
         </div>
-        <div id="aiProgress" style="margin-top: 12px; font-size: 0.8rem; color: var(--accent-primary-light); display: none;"></div>
+        
+        <!-- Visual Progress Bar for AI Loading -->
+        <div id="aiProgressContainer" class="ai-progress-container">
+            <div id="aiProgressBar" class="ai-progress-bar"></div>
+            <div id="aiProgressText" class="ai-progress-text">準備中...</div>
+        </div>
+
         <div class="action-row" style="margin-top: 16px;">
             <button class="btn btn-primary" id="processBtn">⚙️ 加工を実行 (AI透過)</button>
             <button class="btn btn-secondary" id="downloadBtn" style="display: none;">💾 ダウンロード</button>
@@ -228,7 +234,9 @@ const statusLog = document.getElementById('statusLog');
 const autoDetectBtn = document.getElementById('autoDetectBtn');
 const settingsToggle = document.getElementById('settingsToggle');
 const settingsPanel = document.getElementById('settingsPanel');
-const aiProgress = document.getElementById('aiProgress');
+const aiProgressContainer = document.getElementById('aiProgressContainer');
+const aiProgressBar = document.getElementById('aiProgressBar');
+const aiProgressText = document.getElementById('aiProgressText');
 
 // --- Logging ---
 function log(message, level = 'info') {
@@ -696,7 +704,9 @@ async function processCurrentImage() {
     log(`加工開始: "${item.name}"`, 'info');
     processBtn.disabled = true;
     processBtn.innerHTML = '<span class="spinner"></span> 処理中...';
-    aiProgress.style.display = 'block';
+    aiProgressContainer.style.display = 'block';
+    aiProgressBar.style.width = '0%';
+    aiProgressText.textContent = 'AIモデルの初期化中...';
     
     try {
         setPipelineStep('crop');
@@ -728,7 +738,9 @@ async function processCurrentImage() {
             publicPath: "https://unpkg.com/@imgly/background-removal@1.4.5/dist/",
             progress: (key, current, total) => {
                 const percent = Math.round((current / total) * 100);
-                aiProgress.textContent = `⏳ AIモデルをロード/実行中: ${key} (${percent}%)`;
+                // AIモデルは複数ファイル(onnx等)がロードされるため、最後の大きなファイルの進捗を優先的に見せる
+                aiProgressBar.style.width = `${percent}%`;
+                aiProgressText.textContent = `⏳ AIモデルをダウンロード/準備中 (${key}): ${percent}%`;
             }
         };
 
@@ -736,8 +748,9 @@ async function processCurrentImage() {
         item.transparentBlob = transparentBlob;
         item.processed = true;
         
-        aiProgress.textContent = "✅ 背景透過完了";
-        setTimeout(() => { aiProgress.style.display = 'none'; }, 3000);
+        aiProgressBar.style.width = '100%';
+        aiProgressText.textContent = "✅ 背景透過完了！";
+        setTimeout(() => { aiProgressContainer.style.display = 'none'; }, 3000);
 
         showTransparentPreview(transparentBlob);
         downloadBtn.style.display = 'inline-flex';
@@ -748,8 +761,9 @@ async function processCurrentImage() {
         
     } catch (e) {
         log(`❌ 加工エラー: ${e.message}`, 'error');
-        aiProgress.textContent = `❌ エラー: ${e.message}`;
-        aiProgress.style.color = "var(--accent-danger)";
+        aiProgressText.textContent = `❌ エラー: ${e.message}`;
+        aiProgressText.style.color = "var(--accent-danger)";
+        aiProgressBar.style.background = "var(--accent-danger)";
     } finally {
         processBtn.disabled = false;
         processBtn.innerHTML = '⚙️ 加工を実行 (AI透過)';
