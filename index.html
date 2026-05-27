@@ -741,7 +741,7 @@ async function processCurrentImage() {
         aiProgressText.textContent = '⏳ AIモデルを初期化中...';
 
         const config = {
-            publicPath: "https://unpkg.com/@imgly/background-removal@1.4.5/dist/",
+            // 削除: publicPath は指定せず、ライブラリのデフォルト(staticimgly.com)に任せる
             progress: (key, current, total) => {
                 const percent = Math.round((current / total) * 100);
                 // AIモデルは複数ファイル(onnx等)がロードされるため、最後の大きなファイルの進捗を優先的に見せる
