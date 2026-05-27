@@ -1,0 +1,921 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>あの頃カード画像プロセッサー</title>
+    <meta name="description" content="カードゲーム「あの頃の自作TCG」のカード画像を自動加工してGitHubにPushするWebアプリ">
+    <link rel="stylesheet" href="style.css">
+    <!-- imgly background removal module -->
+    <script type="module">
+        import imglyRemoveBackground from "https://unpkg.com/@imgly/background-removal@1.4.5/dist/imglyRemoveBackground.js";
+        window.imglyRemoveBackground = imglyRemoveBackground;
+        window.imglyLoaded = true;
+    </script>
+</head>
+<body>
+
+<div class="app-container">
+    <!-- ===== Header ===== -->
+    <header class="app-header fade-in">
+        <h1>🃏 あの頃カード画像プロセッサー</h1>
+        <p class="subtitle">カード画像をアップロード → AI背景透過 → GitHubへ一括Push</p>
+    </header>
+
+    <!-- ===== Pipeline Progress ===== -->
+    <div class="pipeline-steps fade-in" id="pipelineSteps">
+        <div class="pipeline-step" data-step="upload" title="画像入力"></div>
+        <div class="pipeline-step" data-step="name" title="カード名特定"></div>
+        <div class="pipeline-step" data-step="crop" title="クロップ"></div>
+        <div class="pipeline-step" data-step="rembg" title="AI背景透過"></div>
+        <div class="pipeline-step" data-step="push" title="GitHub Push"></div>
+    </div>
+
+    <!-- ===== Step 1: Image Upload ===== -->
+    <section class="glass-card fade-in" id="uploadSection">
+        <h2 class="card-title">
+            <span class="step-badge">1</span>
+            カード画像の入力
+        </h2>
+        <div class="drop-zone" id="dropZone" role="button" tabindex="0" aria-label="画像をドロップまたはクリックして選択">
+            <div class="drop-zone-icon">📸</div>
+            <div class="drop-zone-text">
+                画像をドラッグ＆ドロップ、<strong>クリックして選択</strong>、<br>
+                または <strong>Ctrl+V</strong> でペースト<br>
+                <small>複数画像対応 • PNG/JPG (全画面またはカード部分のみ)</small>
+            </div>
+            <input type="file" id="fileInput" accept="image/png,image/jpeg" multiple>
+        </div>
+
+        <!-- Queue of uploaded images -->
+        <div class="queue-list" id="queueList" style="display: none;"></div>
+    </section>
+
+    <!-- ===== Step 2: Card Name ===== -->
+    <section class="glass-card fade-in" id="nameSection" style="display: none;">
+        <h2 class="card-title">
+            <span class="step-badge">2</span>
+            カード名の特定
+        </h2>
+        <div class="card-name-section">
+            <div class="input-group" style="flex: 2;">
+                <label for="cardNameInput">カード名</label>
+                <input type="text" id="cardNameInput" list="cardNameList" placeholder="カード名を入力または選択..." autocomplete="off">
+                <datalist id="cardNameList"></datalist>
+            </div>
+            <button class="btn btn-secondary btn-sm" id="autoDetectBtn" title="Gemini APIで自動検出">
+                🤖 自動検出
+            </button>
+        </div>
+        <div id="nameMatchInfo" style="margin-top: 10px; font-size: 0.8rem; color: var(--text-muted);"></div>
+    </section>
+
+    <!-- ===== Step 3: Preview & Process ===== -->
+    <section class="glass-card fade-in" id="processSection" style="display: none;">
+        <h2 class="card-title">
+            <span class="step-badge">3</span>
+            画像加工プレビュー
+        </h2>
+        <div class="preview-container">
+            <div class="preview-box">
+                <div class="preview-label">元画像 (Captured)</div>
+                <div class="preview-content">
+                    <canvas id="originalCanvas"></canvas>
+                </div>
+            </div>
+            <div class="preview-box">
+                <div class="preview-label">クロップ済み (Cropped)</div>
+                <div class="preview-content">
+                    <canvas id="croppedCanvas"></canvas>
+                </div>
+            </div>
+            <div class="preview-box">
+                <div class="preview-label">AI背景透過済み (Transparent)</div>
+                <div class="preview-content checkered-bg">
+                    <canvas id="fadedCanvas"></canvas>
+                </div>
+            </div>
+        </div>
+        <div id="aiProgress" style="margin-top: 12px; font-size: 0.8rem; color: var(--accent-primary-light); display: none;"></div>
+        <div class="action-row" style="margin-top: 16px;">
+            <button class="btn btn-primary" id="processBtn">⚙️ 加工を実行 (AI透過)</button>
+            <button class="btn btn-secondary" id="downloadBtn" style="display: none;">💾 ダウンロード</button>
+        </div>
+    </section>
+
+    <!-- ===== Step 4: GitHub Push ===== -->
+    <section class="glass-card fade-in" id="pushSection" style="display: none;">
+        <h2 class="card-title">
+            <span class="step-badge">4</span>
+            GitHubへPush
+        </h2>
+        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
+            ※ 元画像・クロップ・透過画像、および必要に応じて新規カード名を辞書にPushします。
+        </p>
+        <div class="action-row">
+            <button class="btn btn-success" id="pushBtn" disabled>
+                🚀 GitHubにPush
+            </button>
+            <button class="btn btn-secondary btn-sm" id="pushAllBtn" style="display: none;">
+                📦 すべてPush
+            </button>
+        </div>
+        <div id="pushStatus" style="margin-top: 12px; font-size: 0.82rem; color: var(--text-secondary);"></div>
+    </section>
+
+    <!-- ===== Settings ===== -->
+    <div style="margin-top: 20px;" class="fade-in">
+        <button class="settings-toggle" id="settingsToggle">
+            ⚙️ 設定とヘルプ
+            <span class="chevron">▼</span>
+        </button>
+        <div class="settings-panel" id="settingsPanel">
+            <div class="settings-panel-inner">
+                <!-- Help Section -->
+                <div style="background: rgba(99, 102, 241, 0.1); border: 1px solid rgba(99, 102, 241, 0.3); padding: 12px; border-radius: var(--radius-sm); margin-bottom: 16px;">
+                    <h4 style="margin-bottom: 8px; font-size: 0.9rem; color: var(--accent-primary-light);">🔑 GitHub Personal Access Token (PAT) の取得方法</h4>
+                    <ol style="font-size: 0.8rem; margin-left: 20px; color: var(--text-secondary); line-height: 1.6;">
+                        <li><a href="https://github.com/settings/tokens/new?scopes=repo&description=AnokoroImageProcessor" target="_blank" rel="noopener" style="color: #6ee7b7; font-weight: bold;">こちらのリンク</a> をクリックしてGitHub設定を開きます。</li>
+                        <li>Noteには「AnokoroImageProcessor」等と入力され、<strong>repo</strong>スコープにチェックが入っていることを確認します。</li>
+                        <li>一番下の <strong>[Generate token]</strong> をクリックします。</li>
+                        <li>表示された <code>ghp_...</code> から始まる文字列をコピーし、下の入力欄に貼り付けて「保存」を押してください。</li>
+                    </ol>
+                </div>
+
+                <div class="settings-row">
+                    <div class="input-group" style="flex: 2;">
+                        <label for="githubToken">GitHub Personal Access Token</label>
+                        <input type="password" id="githubToken" placeholder="ghp_xxxxxxxxxxxx">
+                    </div>
+                    <button class="btn btn-secondary btn-sm" onclick="saveSettings()">保存</button>
+                    <button class="btn btn-secondary btn-sm" onclick="clearSettings()">クリア</button>
+                </div>
+                <div class="settings-row">
+                    <div class="input-group">
+                        <label for="repoOwner">リポジトリオーナー</label>
+                        <input type="text" id="repoOwner" value="Omezi42">
+                    </div>
+                    <div class="input-group">
+                        <label for="repoName">リポジトリ名</label>
+                        <input type="text" id="repoName" value="AnokoroImageFolder">
+                    </div>
+                    <div class="input-group">
+                        <label for="targetBranch">ブランチ</label>
+                        <input type="text" id="targetBranch" value="main">
+                    </div>
+                </div>
+                <div class="settings-row">
+                    <div class="input-group" style="flex: 2;">
+                        <label for="geminiApiKey">Gemini API Key（自動検出用・オプション）</label>
+                        <input type="password" id="geminiApiKey" placeholder="AIzaSy...">
+                    </div>
+                    <button class="btn btn-secondary btn-sm" onclick="saveSettings()">保存</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== Status Log ===== -->
+    <section class="glass-card fade-in" style="margin-top: 20px;">
+        <h2 class="card-title">📋 処理ログ</h2>
+        <div class="status-log" id="statusLog">待機中...
+</div>
+    </section>
+</div>
+
+<script>
+// ===============================================
+// あの頃カード画像プロセッサー
+// ===============================================
+
+// --- Constants ---
+const CROP_REGION = { left: 22, top: 86, right: 445, bottom: 309 };
+const CROP_WIDTH = CROP_REGION.right - CROP_REGION.left;   // 423
+const CROP_HEIGHT = CROP_REGION.bottom - CROP_REGION.top;   // 223
+
+const CARD_NAMES_URL = 'https://raw.githubusercontent.com/Omezi42/AnokoroImageFolder/main/all_card_names.txt';
+
+// Default Gemini API key (obfuscated, same as AnokoroWikiDecklist)
+const _k = [81,85,108,54,89,86,78,53,81,50,57,49,84,110,100,105,97,71,70,118,77,109,104,116,87,107,103,49,83,49,74,48,100,48,107,120,79,84,89,52,76,86,111,53,100,122,104,50,78,107,112,66];
+function _dk() { return atob(String.fromCharCode(..._k)); }
+
+// --- State ---
+let cardNames = [];
+let isCardNamesChanged = false;
+let imageQueue = []; // { id, file, dataUrl, name, processed, capturedBlob, croppedBlob, transparentBlob }
+let currentIndex = -1;
+
+// --- DOM Elements ---
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+const queueList = document.getElementById('queueList');
+const nameSection = document.getElementById('nameSection');
+const processSection = document.getElementById('processSection');
+const pushSection = document.getElementById('pushSection');
+const cardNameInput = document.getElementById('cardNameInput');
+const cardNameList = document.getElementById('cardNameList');
+const nameMatchInfo = document.getElementById('nameMatchInfo');
+const originalCanvas = document.getElementById('originalCanvas');
+const croppedCanvas = document.getElementById('croppedCanvas');
+const fadedCanvas = document.getElementById('fadedCanvas'); // Reused for transparent bg
+const processBtn = document.getElementById('processBtn');
+const downloadBtn = document.getElementById('downloadBtn');
+const pushBtn = document.getElementById('pushBtn');
+const pushAllBtn = document.getElementById('pushAllBtn');
+const pushStatus = document.getElementById('pushStatus');
+const statusLog = document.getElementById('statusLog');
+const autoDetectBtn = document.getElementById('autoDetectBtn');
+const settingsToggle = document.getElementById('settingsToggle');
+const settingsPanel = document.getElementById('settingsPanel');
+const aiProgress = document.getElementById('aiProgress');
+
+// --- Logging ---
+function log(message, level = 'info') {
+    const ts = new Date().toLocaleTimeString('ja-JP');
+    const span = document.createElement('span');
+    span.className = `log-${level}`;
+    span.textContent = `[${ts}] ${message}\n`;
+    statusLog.appendChild(span);
+    statusLog.scrollTop = statusLog.scrollHeight;
+    console.log(`[${level}] ${message}`);
+}
+
+// --- Pipeline Steps Visualization ---
+function setPipelineStep(stepName) {
+    const steps = ['upload', 'name', 'crop', 'rembg', 'push'];
+    const idx = steps.indexOf(stepName);
+    document.querySelectorAll('.pipeline-step').forEach((el, i) => {
+        el.classList.remove('active', 'done');
+        if (i < idx) el.classList.add('done');
+        if (i === idx) el.classList.add('active');
+    });
+}
+
+// --- Settings ---
+function loadSettings() {
+    const saved = localStorage.getItem('anokoro_img_settings');
+    if (saved) {
+        try {
+            const s = JSON.parse(saved);
+            if (s.githubToken) document.getElementById('githubToken').value = s.githubToken;
+            if (s.repoOwner) document.getElementById('repoOwner').value = s.repoOwner;
+            if (s.repoName) document.getElementById('repoName').value = s.repoName;
+            if (s.targetBranch) document.getElementById('targetBranch').value = s.targetBranch;
+            if (s.geminiApiKey) document.getElementById('geminiApiKey').value = s.geminiApiKey;
+        } catch(e) {}
+    }
+}
+
+function saveSettings() {
+    const settings = {
+        githubToken: document.getElementById('githubToken').value.trim(),
+        repoOwner: document.getElementById('repoOwner').value.trim(),
+        repoName: document.getElementById('repoName').value.trim(),
+        targetBranch: document.getElementById('targetBranch').value.trim(),
+        geminiApiKey: document.getElementById('geminiApiKey').value.trim()
+    };
+    localStorage.setItem('anokoro_img_settings', JSON.stringify(settings));
+    log('設定を保存しました', 'success');
+    updatePushButtonState();
+}
+
+function clearSettings() {
+    localStorage.removeItem('anokoro_img_settings');
+    document.getElementById('githubToken').value = '';
+    document.getElementById('geminiApiKey').value = '';
+    log('設定をクリアしました', 'info');
+    updatePushButtonState();
+}
+
+function getGeminiApiKey() {
+    const custom = document.getElementById('geminiApiKey').value.trim();
+    return custom || _dk();
+}
+
+function getGithubToken() {
+    return document.getElementById('githubToken').value.trim();
+}
+
+function updatePushButtonState() {
+    const token = getGithubToken();
+    const hasProcessed = currentIndex >= 0 && imageQueue[currentIndex] && imageQueue[currentIndex].processed;
+    pushBtn.disabled = !token || !hasProcessed;
+    if (!token) {
+        pushStatus.textContent = '⚠️ GitHubにPushするには設定でPersonal Access Tokenを入力してください';
+    } else if (!hasProcessed && currentIndex >= 0) {
+        pushStatus.textContent = '💡 まず画像を加工してください';
+    } else {
+        pushStatus.textContent = '';
+    }
+}
+
+// Settings toggle
+settingsToggle.addEventListener('click', () => {
+    settingsToggle.classList.toggle('open');
+    settingsPanel.classList.toggle('open');
+});
+
+// --- Load Card Names ---
+async function loadCardNames() {
+    log('カード名リストを取得中...', 'info');
+    try {
+        const response = await fetch(CARD_NAMES_URL);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const text = await response.text();
+        cardNames = text.split('\n').map(n => n.trim()).filter(n => n.length > 0);
+        updateCardNameDatalist();
+        log(`カード名リスト取得完了: ${cardNames.length}枚`, 'success');
+    } catch(e) {
+        log(`カード名リスト取得エラー: ${e.message}`, 'error');
+    }
+}
+
+function updateCardNameDatalist() {
+    cardNameList.innerHTML = '';
+    cardNames.forEach(name => {
+        const opt = document.createElement('option');
+        opt.value = name;
+        cardNameList.appendChild(opt);
+    });
+}
+
+// --- Image Upload Handling ---
+function handleFiles(files) {
+    const imageFiles = Array.from(files).filter(f => f.type.startsWith('image/'));
+    if (imageFiles.length === 0) return;
+
+    imageFiles.forEach(file => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const item = {
+                id: Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+                file: file,
+                dataUrl: e.target.result,
+                name: '',
+                processed: false,
+                capturedBlob: null,
+                croppedBlob: null,
+                transparentBlob: null
+            };
+            imageQueue.push(item);
+            renderQueue();
+            log(`画像を追加: ${file.name}`, 'info');
+
+            // Auto-select first image
+            if (imageQueue.length === 1) {
+                selectImage(0);
+            }
+        };
+        reader.readAsDataURL(file);
+    });
+
+    setPipelineStep('upload');
+}
+
+// Drop zone events
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') fileInput.click(); });
+fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
+
+dropZone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    dropZone.classList.add('drag-over');
+});
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropZone.classList.remove('drag-over');
+    handleFiles(e.dataTransfer.files);
+});
+
+window.addEventListener('paste', (e) => {
+    const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+    const files = [];
+    for (const item of items) {
+        if (item.kind === 'file' && item.type.startsWith('image/')) {
+            files.push(item.getAsFile());
+        }
+    }
+    if (files.length > 0) {
+        handleFiles(files);
+        log('クリップボードから画像を読み込みました', 'info');
+    }
+});
+
+// --- Queue Rendering ---
+function renderQueue() {
+    if (imageQueue.length === 0) {
+        queueList.style.display = 'none';
+        return;
+    }
+    queueList.style.display = 'grid';
+    queueList.innerHTML = '';
+
+    imageQueue.forEach((item, idx) => {
+        const div = document.createElement('div');
+        div.className = `queue-item ${idx === currentIndex ? 'selected' : ''} ${item.processed ? 'processed' : ''}`;
+        div.onclick = () => selectImage(idx);
+
+        const img = document.createElement('img');
+        img.src = item.dataUrl;
+        img.alt = item.name || '未処理';
+        div.appendChild(img);
+
+        const status = document.createElement('div');
+        status.className = 'queue-status';
+        status.textContent = item.name || (item.processed ? '✓ 処理済み' : '未処理');
+        div.appendChild(status);
+
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'remove-btn';
+        removeBtn.innerHTML = '✕';
+        removeBtn.onclick = (e) => { e.stopPropagation(); removeImage(idx); };
+        div.appendChild(removeBtn);
+
+        queueList.appendChild(div);
+    });
+
+    const processedCount = imageQueue.filter(i => i.processed).length;
+    pushAllBtn.style.display = processedCount > 1 ? 'inline-flex' : 'none';
+}
+
+function removeImage(idx) {
+    imageQueue.splice(idx, 1);
+    if (currentIndex >= imageQueue.length) currentIndex = imageQueue.length - 1;
+    if (currentIndex >= 0) selectImage(currentIndex);
+    else {
+        nameSection.style.display = 'none';
+        processSection.style.display = 'none';
+        pushSection.style.display = 'none';
+    }
+    renderQueue();
+}
+
+// --- Select & Display Image ---
+function selectImage(idx) {
+    currentIndex = idx;
+    const item = imageQueue[idx];
+
+    nameSection.style.display = 'block';
+    processSection.style.display = 'block';
+    pushSection.style.display = 'block';
+    cardNameInput.value = item.name || '';
+    nameMatchInfo.textContent = '';
+
+    const img = new Image();
+    img.onload = () => {
+        originalCanvas.width = img.width;
+        originalCanvas.height = img.height;
+        const ctx = originalCanvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+
+        if (item.processed && item.transparentBlob) {
+            showCroppedPreview(img);
+            showTransparentPreview(item.transparentBlob);
+            downloadBtn.style.display = 'inline-flex';
+        } else {
+            croppedCanvas.width = 0;
+            croppedCanvas.height = 0;
+            fadedCanvas.width = 0;
+            fadedCanvas.height = 0;
+            downloadBtn.style.display = 'none';
+        }
+    };
+    img.src = item.dataUrl;
+
+    renderQueue();
+    setPipelineStep('name');
+    updatePushButtonState();
+}
+
+function showCroppedPreview(sourceImg) {
+    // If the uploaded image is already around crop size, assume it's already cropped
+    let isAlreadyCropped = (sourceImg.width < CROP_WIDTH + 100 && sourceImg.height < CROP_HEIGHT + 100);
+    
+    croppedCanvas.width = isAlreadyCropped ? sourceImg.width : CROP_WIDTH;
+    croppedCanvas.height = isAlreadyCropped ? sourceImg.height : CROP_HEIGHT;
+    const ctx = croppedCanvas.getContext('2d');
+    
+    if (isAlreadyCropped) {
+        ctx.drawImage(sourceImg, 0, 0);
+    } else {
+        ctx.drawImage(sourceImg,
+            CROP_REGION.left, CROP_REGION.top, CROP_WIDTH, CROP_HEIGHT,
+            0, 0, CROP_WIDTH, CROP_HEIGHT
+        );
+    }
+}
+
+function showTransparentPreview(blob) {
+    const url = URL.createObjectURL(blob);
+    const transparentImg = new Image();
+    transparentImg.onload = () => {
+        fadedCanvas.width = transparentImg.width;
+        fadedCanvas.height = transparentImg.height;
+        const ctx = fadedCanvas.getContext('2d');
+        ctx.drawImage(transparentImg, 0, 0);
+        URL.revokeObjectURL(url);
+    };
+    transparentImg.src = url;
+}
+
+// --- Card Name Auto Detect (Gemini API) ---
+autoDetectBtn.addEventListener('click', async () => {
+    if (currentIndex < 0) return;
+    const item = imageQueue[currentIndex];
+
+    autoDetectBtn.disabled = true;
+    autoDetectBtn.innerHTML = '<span class="spinner"></span> 検出中...';
+    log('Gemini APIでカード名を自動検出中...', 'info');
+
+    try {
+        const apiKey = getGeminiApiKey();
+        const base64 = item.dataUrl.split(',')[1];
+        const mimeType = item.dataUrl.split(';')[0].split(':')[1];
+
+        const payload = {
+            contents: [{
+                parts: [
+                    { text: 'この画像はカードゲームのカード1枚の画像です。カード上部に記載されているカード名のテキストを読み取ってください。カード名のみを出力してください。余計な説明は不要です。' },
+                    { inlineData: { mimeType, data: base64 } }
+                ]
+            }],
+            generationConfig: {
+                temperature: 0.1,
+                maxOutputTokens: 100
+            }
+        };
+
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) throw new Error(`API Error: ${response.status}`);
+        const data = await response.json();
+        let detectedName = data.candidates[0].content.parts[0].text.trim();
+
+        detectedName = detectedName.replace(/^[「『]/, '').replace(/[」』]$/, '').trim();
+        log(`Gemini検出結果: "${detectedName}"`, 'info');
+
+        const matched = findBestMatch(detectedName, cardNames);
+        if (matched.distance === 0) {
+            cardNameInput.value = matched.name;
+            nameMatchInfo.innerHTML = `<span class="badge badge-success">✓ 完全一致</span> ${matched.name}`;
+            log(`カード名確定: "${matched.name}"`, 'success');
+        } else if (matched.distance <= 3) {
+            cardNameInput.value = matched.name;
+            nameMatchInfo.innerHTML = `<span class="badge badge-warning">≈ 近似一致</span> "${detectedName}" → "${matched.name}" (距離: ${matched.distance})`;
+            log(`カード名補正: "${detectedName}" → "${matched.name}" (距離: ${matched.distance})`, 'warn');
+        } else {
+            cardNameInput.value = detectedName;
+            nameMatchInfo.innerHTML = `<span class="badge badge-info">✨ 新規カード</span> "${detectedName}" (Push時に辞書に追加されます)`;
+            log(`新規カード名の可能性: "${detectedName}"`, 'info');
+        }
+
+        item.name = cardNameInput.value;
+        renderQueue();
+
+    } catch(e) {
+        log(`自動検出エラー: ${e.message}`, 'error');
+        nameMatchInfo.innerHTML = `<span style="color: var(--accent-danger);">❌ 自動検出に失敗しました: ${e.message}</span>`;
+    } finally {
+        autoDetectBtn.disabled = false;
+        autoDetectBtn.innerHTML = '🤖 自動検出';
+    }
+});
+
+cardNameInput.addEventListener('change', () => {
+    if (currentIndex >= 0) {
+        imageQueue[currentIndex].name = cardNameInput.value.trim();
+        renderQueue();
+
+        const name = cardNameInput.value.trim();
+        if (cardNames.includes(name)) {
+            nameMatchInfo.innerHTML = `<span class="badge badge-success">✓ リスト内</span>`;
+        } else if (name) {
+            const m = findBestMatch(name, cardNames);
+            if (m.distance <= 3) {
+                nameMatchInfo.innerHTML = `<span class="badge badge-info">💡 候補</span> "${m.name}" (距離: ${m.distance})`;
+            } else {
+                nameMatchInfo.innerHTML = `<span class="badge badge-info">✨ 新規カード</span> (Push時に辞書に追加されます)`;
+            }
+        }
+    }
+});
+
+function levenshtein(a, b) {
+    if (a.length === 0) return b.length;
+    if (b.length === 0) return a.length;
+    const matrix = Array.from({ length: a.length + 1 }, () => Array(b.length + 1).fill(0));
+    for (let i = 0; i <= a.length; i++) matrix[i][0] = i;
+    for (let j = 0; j <= b.length; j++) matrix[0][j] = j;
+    for (let i = 1; i <= a.length; i++) {
+        for (let j = 1; j <= b.length; j++) {
+            const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+            matrix[i][j] = Math.min(matrix[i - 1][j] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j - 1] + cost);
+        }
+    }
+    return matrix[a.length][b.length];
+}
+
+function findBestMatch(input, list) {
+    if (list.includes(input)) return { name: input, distance: 0 };
+    let bestMatch = '';
+    let minDistance = Infinity;
+    list.forEach(item => {
+        const dist = levenshtein(input, item);
+        if (dist < minDistance) {
+            minDistance = dist;
+            bestMatch = item;
+        }
+    });
+    return { name: bestMatch, distance: minDistance };
+}
+
+// --- Helper for Canvas to Blob ---
+function canvasToBlobAsync(canvas, mimeType = 'image/png') {
+    return new Promise((resolve) => {
+        canvas.toBlob((blob) => resolve(blob), mimeType);
+    });
+}
+
+// --- Image Processing (Crop + AI Rembg) ---
+processBtn.addEventListener('click', () => {
+    if (currentIndex < 0) return;
+    processCurrentImage();
+});
+
+async function processCurrentImage() {
+    const item = imageQueue[currentIndex];
+    if (!item) return;
+
+    if (!cardNameInput.value.trim()) {
+        log('カード名を入力してください', 'warn');
+        cardNameInput.focus();
+        return;
+    }
+    item.name = cardNameInput.value.trim();
+
+    log(`加工開始: "${item.name}"`, 'info');
+    processBtn.disabled = true;
+    processBtn.innerHTML = '<span class="spinner"></span> 処理中...';
+    aiProgress.style.display = 'block';
+    
+    try {
+        setPipelineStep('crop');
+        
+        // 1. Get original Blob
+        item.capturedBlob = item.file; // Since they uploaded it, just save the raw file
+
+        // 2. Crop
+        log('  → イラスト部分をクロップ中...', 'info');
+        const img = new Image();
+        await new Promise((resolve, reject) => {
+            img.onload = resolve;
+            img.onerror = reject;
+            img.src = item.dataUrl;
+        });
+        
+        showCroppedPreview(img);
+        item.croppedBlob = await canvasToBlobAsync(croppedCanvas, 'image/png');
+
+        // 3. AI Background Removal
+        setPipelineStep('rembg');
+        log('  → AIによる背景透過処理中...', 'info');
+        
+        if (!window.imglyLoaded) {
+            throw new Error("AIモデルライブラリの読み込みが完了していません。ページを再読み込みしてください。");
+        }
+
+        const config = {
+            publicPath: "https://unpkg.com/@imgly/background-removal@1.4.5/dist/",
+            progress: (key, current, total) => {
+                const percent = Math.round((current / total) * 100);
+                aiProgress.textContent = `⏳ AIモデルをロード/実行中: ${key} (${percent}%)`;
+            }
+        };
+
+        const transparentBlob = await window.imglyRemoveBackground(item.croppedBlob, config);
+        item.transparentBlob = transparentBlob;
+        item.processed = true;
+        
+        aiProgress.textContent = "✅ 背景透過完了";
+        setTimeout(() => { aiProgress.style.display = 'none'; }, 3000);
+
+        showTransparentPreview(transparentBlob);
+        downloadBtn.style.display = 'inline-flex';
+        renderQueue();
+        updatePushButtonState();
+        log(`加工完了: "${item.name}" (${transparentBlob.size} bytes)`, 'success');
+        setPipelineStep('push');
+        
+    } catch (e) {
+        log(`❌ 加工エラー: ${e.message}`, 'error');
+        aiProgress.textContent = `❌ エラー: ${e.message}`;
+        aiProgress.style.color = "var(--accent-danger)";
+    } finally {
+        processBtn.disabled = false;
+        processBtn.innerHTML = '⚙️ 加工を実行 (AI透過)';
+    }
+}
+
+// --- Download ---
+downloadBtn.addEventListener('click', () => {
+    if (currentIndex < 0) return;
+    const item = imageQueue[currentIndex];
+    if (!item.transparentBlob) return;
+
+    const safeName = item.name.replace(/[/\\:*?"<>|]/g, '_');
+    const url = URL.createObjectURL(item.transparentBlob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${safeName}.png`;
+    a.click();
+    URL.revokeObjectURL(url);
+    log(`ダウンロード: ${safeName}.png`, 'info');
+});
+
+// --- GitHub Push ---
+pushBtn.addEventListener('click', async () => {
+    if (currentIndex < 0) return;
+    pushBtn.disabled = true;
+    await pushImageToGitHub(currentIndex);
+    await checkAndUpdateCardNames();
+    pushBtn.disabled = false;
+    updatePushButtonState();
+});
+
+pushAllBtn.addEventListener('click', async () => {
+    const processedItems = imageQueue.filter(i => i.processed && i.transparentBlob && i.name);
+    if (processedItems.length === 0) return;
+
+    log(`一括Push開始: ${processedItems.length}件`, 'info');
+    pushAllBtn.disabled = true;
+    pushBtn.disabled = true;
+
+    for (let i = 0; i < imageQueue.length; i++) {
+        const item = imageQueue[i];
+        if (item.processed && item.transparentBlob && item.name) {
+            await pushImageToGitHub(i);
+        }
+    }
+    await checkAndUpdateCardNames();
+
+    pushAllBtn.disabled = false;
+    pushBtn.disabled = false;
+    updatePushButtonState();
+    log('一括Push完了！', 'success');
+});
+
+async function checkAndUpdateCardNames() {
+    if (!isCardNamesChanged) return;
+    log(`カード名リストの更新をPushします...`, 'info');
+    
+    const token = getGithubToken();
+    const owner = document.getElementById('repoOwner').value.trim();
+    const repo = document.getElementById('repoName').value.trim();
+    const branch = document.getElementById('targetBranch').value.trim();
+    const filePath = 'all_card_names.txt';
+    
+    try {
+        const newContent = cardNames.join('\n') + '\n';
+        const base64 = btoa(unescape(encodeURIComponent(newContent)));
+        
+        let sha = null;
+        try {
+            const checkRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${branch}`, { headers: { 'Authorization': `Bearer ${token}` } });
+            if (checkRes.ok) {
+                const existing = await checkRes.json();
+                sha = existing.sha;
+            }
+        } catch(e) {}
+        
+        const body = {
+            message: `📝 カード名リストを更新（新規追加）`,
+            content: base64,
+            branch: branch
+        };
+        if (sha) body.sha = sha;
+
+        const putRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`, {
+            method: 'PUT',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+
+        if (!putRes.ok) throw new Error(await putRes.text());
+        log(`✅ all_card_names.txt の更新完了`, 'success');
+        isCardNamesChanged = false; // Reset flag
+    } catch(e) {
+        log(`❌ 辞書更新エラー: ${e.message}`, 'error');
+    }
+}
+
+async function uploadFileToGithub(token, owner, repo, branch, filePath, blob, commitMessage) {
+    const arrayBuffer = await blob.arrayBuffer();
+    // Safely convert ArrayBuffer to base64
+    let binary = '';
+    const bytes = new Uint8Array(arrayBuffer);
+    const len = bytes.byteLength;
+    for (let i = 0; i < len; i++) {
+        binary += String.fromCharCode(bytes[i]);
+    }
+    const base64 = window.btoa(binary);
+
+    let sha = null;
+    try {
+        const checkRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${branch}`, { headers: { 'Authorization': `Bearer ${token}` } });
+        if (checkRes.ok) {
+            const existing = await checkRes.json();
+            sha = existing.sha;
+        }
+    } catch(e) {}
+
+    const body = {
+        message: commitMessage,
+        content: base64,
+        branch: branch
+    };
+    if (sha) body.sha = sha;
+
+    const putRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`, {
+        method: 'PUT',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+    });
+
+    if (!putRes.ok) {
+        throw new Error(`HTTP ${putRes.status} - ${await putRes.text()}`);
+    }
+    return await putRes.json();
+}
+
+async function pushImageToGitHub(idx) {
+    const item = imageQueue[idx];
+    if (!item || !item.transparentBlob || !item.name) return;
+
+    const token = getGithubToken();
+    if (!token) {
+        log('GitHub Tokenが設定されていません', 'error');
+        return;
+    }
+
+    const owner = document.getElementById('repoOwner').value.trim();
+    const repo = document.getElementById('repoName').value.trim();
+    const branch = document.getElementById('targetBranch').value.trim();
+    const safeName = item.name.replace(/[/\\:*?"<>|]/g, '_');
+
+    pushBtn.innerHTML = '<span class="spinner"></span> Push中...';
+
+    try {
+        // 1. captured_cards
+        if (item.capturedBlob) {
+            log(`Pushing: images/captured_cards/${safeName}.png`, 'info');
+            await uploadFileToGithub(token, owner, repo, branch, `images/captured_cards/${safeName}.png`, item.capturedBlob, `📸 元画像追加/更新: ${item.name}`);
+        }
+        
+        // 2. cropped_cards
+        if (item.croppedBlob) {
+            log(`Pushing: images/cropped_cards/${safeName}.png`, 'info');
+            await uploadFileToGithub(token, owner, repo, branch, `images/cropped_cards/${safeName}.png`, item.croppedBlob, `✂️ クロップ画像追加/更新: ${item.name}`);
+        }
+
+        // 3. transparent_cards
+        log(`Pushing: images/transparent_cards/${safeName}.png`, 'info');
+        const result = await uploadFileToGithub(token, owner, repo, branch, `images/transparent_cards/${safeName}.png`, item.transparentBlob, `🃏 透過画像追加/更新: ${item.name}`);
+        
+        log(`✅ 3種画像のPush成功: ${item.name}`, 'success');
+        pushStatus.innerHTML = `✅ <strong>${item.name}</strong> 関連の画像をPushしました <a href="${result.content.html_url}" target="_blank" style="color: var(--accent-primary-light);">→ GitHubで確認</a>`;
+
+        // Add to cardNames if it's new
+        if (!cardNames.includes(item.name)) {
+            cardNames.push(item.name);
+            cardNames.sort();
+            updateCardNameDatalist();
+            isCardNamesChanged = true;
+            log(`✨ 新規カード名を辞書に追加予約: ${item.name}`, 'info');
+        }
+
+    } catch(e) {
+        log(`❌ Pushエラー: ${e.message}`, 'error');
+        pushStatus.innerHTML = `<span style="color: var(--accent-danger);">❌ Pushエラー: ${e.message}</span>`;
+    } finally {
+        pushBtn.innerHTML = '🚀 GitHubにPush';
+    }
+}
+
+// --- Initialize ---
+window.addEventListener('load', async () => {
+    loadSettings();
+    updatePushButtonState();
+    await loadCardNames();
+    setPipelineStep('upload');
+    log('準備完了！ カード画像をアップロードしてください。', 'success');
+});
+</script>
+
+</body>
+</html>
