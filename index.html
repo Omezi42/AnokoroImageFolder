@@ -728,7 +728,7 @@ async function processCurrentImage() {
             log('  → AIエンジン本体をブラウザにダウンロード中...', 'info');
             aiProgressText.textContent = '⏳ AIエンジン本体をダウンロードしています (数秒かかります)...';
             try {
-                const module = await import("https://unpkg.com/@imgly/background-removal@1.4.5/dist/imglyRemoveBackground.js");
+                const module = await import("https://unpkg.com/@imgly/background-removal@1.4.5/dist/index.mjs");
                 window.imglyRemoveBackground = module.default || module;
                 log('  → AIエンジンのロード完了', 'success');
             } catch (err) {
