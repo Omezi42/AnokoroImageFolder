@@ -189,6 +189,7 @@
 // ===============================================
 
 // --- Constants ---
+const SCREENSHOT_CROP = { x: 293, y: 175, width: 477, height: 665 };
 const CROP_REGION = { left: 22, top: 86, right: 445, bottom: 309 };
 const CROP_WIDTH = CROP_REGION.right - CROP_REGION.left;   // 423
 const CROP_HEIGHT = CROP_REGION.bottom - CROP_REGION.top;   // 223
@@ -339,36 +340,69 @@ function updateCardNameDatalist() {
     });
 }
 
+// --- Helper for Base64 to Blob ---
+function dataURLtoBlob(dataurl) {
+    let arr = dataurl.split(','), mime = arr[0].match(/:(.*?);/)[1],
+        bstr = atob(arr[1]), n = bstr.length, u8arr = new Uint8Array(n);
+    while(n--){
+        u8arr[n] = bstr.charCodeAt(n);
+    }
+    return new Blob([u8arr], {type:mime});
+}
+
 // --- Image Upload Handling ---
-function handleFiles(files) {
+async function handleFiles(files) {
     const imageFiles = Array.from(files).filter(f => f.type.startsWith('image/'));
     if (imageFiles.length === 0) return;
 
-    imageFiles.forEach(file => {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            const item = {
-                id: Date.now() + '_' + Math.random().toString(36).substr(2, 6),
-                file: file,
-                dataUrl: e.target.result,
-                name: '',
-                processed: false,
-                capturedBlob: null,
-                croppedBlob: null,
-                transparentBlob: null
+    for (const file of imageFiles) {
+        const dataUrl = await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = (e) => resolve(e.target.result);
+            reader.readAsDataURL(file);
+        });
+
+        // Load image to check dimensions
+        const img = new Image();
+        const processedDataUrl = await new Promise((resolve) => {
+            img.onload = () => {
+                // If it looks like a full screen screenshot (e.g. 1280x720 or 1920x1080)
+                if (img.width >= 1000 && img.height >= 600) {
+                    log(`📸 全画面スクショを検出 (${img.width}x${img.height})。カード部分を自動切り出しします。`, 'info');
+                    const tmpCanvas = document.createElement('canvas');
+                    tmpCanvas.width = SCREENSHOT_CROP.width;
+                    tmpCanvas.height = SCREENSHOT_CROP.height;
+                    const ctx = tmpCanvas.getContext('2d');
+                    ctx.drawImage(img, 
+                        SCREENSHOT_CROP.x, SCREENSHOT_CROP.y, SCREENSHOT_CROP.width, SCREENSHOT_CROP.height, 
+                        0, 0, SCREENSHOT_CROP.width, SCREENSHOT_CROP.height
+                    );
+                    resolve(tmpCanvas.toDataURL('image/png'));
+                } else {
+                    resolve(dataUrl);
+                }
             };
-            imageQueue.push(item);
-            renderQueue();
-            log(`画像を追加: ${file.name}`, 'info');
+            img.src = dataUrl;
+        });
 
-            // Auto-select first image
-            if (imageQueue.length === 1) {
-                selectImage(0);
-            }
+        const item = {
+            id: Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+            file: file,
+            dataUrl: processedDataUrl, // May be cropped if screenshot
+            name: '',
+            processed: false,
+            capturedBlob: dataURLtoBlob(processedDataUrl), // Store as blob for uploading
+            croppedBlob: null,
+            transparentBlob: null
         };
-        reader.readAsDataURL(file);
-    });
+        imageQueue.push(item);
+        log(`画像を追加: ${file.name}`, 'info');
+    }
 
+    renderQueue();
+    if (imageQueue.length > 0 && currentIndex === -1) {
+        selectImage(0);
+    }
     setPipelineStep('upload');
 }
 
@@ -667,8 +701,8 @@ async function processCurrentImage() {
     try {
         setPipelineStep('crop');
         
-        // 1. Get original Blob
-        item.capturedBlob = item.file; // Since they uploaded it, just save the raw file
+        // 1. Get original Blob (already generated in handleFiles)
+        // item.capturedBlob is already set to the properly sized 477x665 image
 
         // 2. Crop
         log('  → イラスト部分をクロップ中...', 'info');
