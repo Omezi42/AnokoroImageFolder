@@ -6,12 +6,6 @@
     <title>あの頃カード画像プロセッサー</title>
     <meta name="description" content="カードゲーム「あの頃の自作TCG」のカード画像を自動加工してGitHubにPushするWebアプリ">
     <link rel="stylesheet" href="style.css">
-    <!-- imgly background removal module -->
-    <script type="module">
-        import imglyRemoveBackground from "https://unpkg.com/@imgly/background-removal@1.4.5/dist/imglyRemoveBackground.js";
-        window.imglyRemoveBackground = imglyRemoveBackground;
-        window.imglyLoaded = true;
-    </script>
 </head>
 <body>
 
@@ -728,11 +722,22 @@ async function processCurrentImage() {
 
         // 3. AI Background Removal
         setPipelineStep('rembg');
-        log('  → AIによる背景透過処理中...', 'info');
         
-        if (!window.imglyLoaded) {
-            throw new Error("AIモデルライブラリの読み込みが完了していません。ページを再読み込みしてください。");
+        // Dynamically load the library if not already loaded
+        if (!window.imglyRemoveBackground) {
+            log('  → AIエンジン本体をブラウザにダウンロード中...', 'info');
+            aiProgressText.textContent = '⏳ AIエンジン本体をダウンロードしています (数秒かかります)...';
+            try {
+                const module = await import("https://unpkg.com/@imgly/background-removal@1.4.5/dist/imglyRemoveBackground.js");
+                window.imglyRemoveBackground = module.default || module;
+                log('  → AIエンジンのロード完了', 'success');
+            } catch (err) {
+                throw new Error("AIエンジンのダウンロードに失敗しました。ネットワーク接続を確認してください。詳細: " + err.message);
+            }
         }
+
+        log('  → AIによる背景透過処理中...', 'info');
+        aiProgressText.textContent = '⏳ AIモデルを初期化中...';
 
         const config = {
             publicPath: "https://unpkg.com/@imgly/background-removal@1.4.5/dist/",
